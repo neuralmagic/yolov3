@@ -66,7 +66,13 @@ def load_checkpoint(type_, weights, device, cfg=None, hyp=None, nc=None, recipe=
 
     # load sparseml recipe for applying pruning and quantization
     recipe = recipe or (ckpt['recipe'] if 'recipe' in ckpt else None)
-    sparseml_wrapper = SparseMLWrapper(model, recipe, rank, start_epoch)
+    sparseml_wrapper = SparseMLWrapper(model, recipe)
+    if type_ in ['ema', 'ensemble']:
+        # apply the recipe to create the final state of the model when not training
+        sparseml_wrapper.apply()
+    else:
+        # intialize the recipe for training
+        sparseml_wrapper.initialize(start_epoch)
 
     if type_ == 'train':
         # load any missing weights from the model

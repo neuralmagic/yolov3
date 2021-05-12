@@ -1,72 +1,71 @@
 import math
 
-from sparseml.pytorch.optim import ScheduledModifierManager, ScheduledOptimizer
+from sparseml.pytorch.optim import ScheduledModifierManager
 from sparseml.pytorch.utils import SparsificationGroupLogger
 
 from utils.torch_utils import is_parallel
 
 
 class SparseMLWrapper(object):
-    def __init__(self, model, recipe, rank, start_epoch):
+    def __init__(self, model, recipe):
         self.enabled = bool(recipe)
-        self.model = model
+        self.model = model.module if is_parallel(model) else model
         self.recipe = recipe
-        self.rank = rank
-        self.start_epoch = start_epoch
-
         self.manager = ScheduledModifierManager.from_yaml(recipe) if self.enabled else None
         self.logger = None
-        self.tb_writer = None
-        self.wandb_logger = None
-
-        if self.qat_active(start_epoch):
-            # enable the quantization modifiers to start immediately if they're scheduled
-            for quant_mod in self.manager.quantization_modifiers:
-                quant_mod.enable_on_initialize = True
-            self.manager.initialize(model, None)
 
     def state_dict(self):
         return {
-            'recipe': str(self.manager) if self.enabled else None
+            'recipe': str(self.manager) if self.enabled else None,
         }
 
-    def initialize_loggers(self, logger, tb_writer, wandb_logger):
-        self.logger = logger
-        self.tb_writer = tb_writer
-        self.wandb_logger = wandb_logger
+    def apply(self):
+        if not self.enabled:
+            return
 
-        if self.enabled and wandb_logger.wandb:
+        self.manager.apply(self.model)
+
+    def initialize(self, start_epoch):
+        if not self.enabled:
+            return
+
+        self.manager.initialize(self.model, start_epoch)
+
+    def initialize_loggers(self, logger, tb_writer, wandb_logger, rank):
+        self.logger = logger
+
+        if not self.enabled or rank not in [-1, 0]:
+            return
+
+        def _logging_lambda(log_tag, log_val, log_vals, step, walltime):
+            if not wandb_logger or not wandb_logger.wandb:
+                return
+
+            if log_val is not None:
+                wandb_logger.log({log_tag: log_val})
+
+            if log_vals:
+                wandb_logger.log(log_vals)
+
+        self.manager.initialize_loggers([
+            SparsificationGroupLogger(
+                lambda_func=_logging_lambda,
+                python=self.logger,
+                tensorboard=tb_writer,
+            )
+        ])
+
+        if wandb_logger.wandb:
             artifact = wandb_logger.wandb.Artifact('recipe', type='recipe')
             with artifact.new_file('recipe.yaml') as file:
                 file.write(str(self.manager))
             wandb_logger.wandb.log_artifact(artifact)
 
-    def setup_optimizer(self, optimizer, model, dataloader):
+    def modify(self, scaler, optimizer, model, dataloader):
         if not self.enabled:
-            return optimizer
+            return scaler
 
-        def _logging_lambda(log_tag, log_val, log_vals, step, walltime):
-            if not self.wandb_logger or not self.wandb_logger.wandb:
-                return
-
-            if log_val is not None:
-                self.wandb_logger.log({log_tag: log_val})
-
-            if log_vals:
-                self.wandb_logger.log(log_vals)
-
-        return ScheduledOptimizer(
-            optimizer,
-            model if not is_parallel(model) else model.module,
-            self.manager,
-            steps_per_epoch=len(dataloader),
-            loggers=[SparsificationGroupLogger(
-                lambda_func=_logging_lambda,
-                python=self.logger,
-                tensorboard=self.tb_writer,
-                enabled=self.rank in [-1, 0]
-            )]
-        )
+        return self.manager.modify(model, optimizer, steps_per_epoch=len(dataloader), wrap_optim=scaler)
 
     def check_lr_override(self, scheduler):
         # Override lr scheduler if recipe makes any LR updates

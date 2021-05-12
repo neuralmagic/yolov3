@@ -31,7 +31,7 @@ from utils.general import labels_to_class_weights, increment_path, labels_to_ima
 from utils.loss import ComputeLoss
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.sparse import SparseMLWrapper
-from utils.torch_utils import ModelEMA, select_device, torch_distributed_zero_first, is_parallel
+from utils.torch_utils import ModelEMA, select_device, torch_distributed_zero_first
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,8 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info(extras['report'])  # report
     else:
         model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-        sparseml_wrapper = SparseMLWrapper(model, opt.recipe, rank, start_epoch=0)
+        sparseml_wrapper = SparseMLWrapper(model, opt.recipe)
+        sparseml_wrapper.initialize(start_epoch=0.0)
         ckpt = None
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
@@ -228,12 +229,6 @@ def train(hyp, opt, device, tb_writer=None):
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
 
-    # SparseML Integration
-    sparseml_wrapper.initialize_loggers(logger, tb_writer, wandb_logger)
-    optimizer = sparseml_wrapper.setup_optimizer(optimizer, model, dataloader)
-    scheduler = sparseml_wrapper.check_lr_override(scheduler)
-    epochs = sparseml_wrapper.check_epoch_override(epochs)
-
     # Start training
     t0 = time.time()
     nw = max(round(hyp['warmup_epochs'] * nb), 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
@@ -248,6 +243,13 @@ def train(hyp, opt, device, tb_writer=None):
                 f'Using {dataloader.num_workers} dataloader workers\n'
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
+
+    # SparseML Integration
+    sparseml_wrapper.initialize_loggers(logger, tb_writer, wandb_logger, rank)
+    scaler = sparseml_wrapper.modify(scaler, optimizer, model, dataloader)
+    scheduler = sparseml_wrapper.check_lr_override(scheduler)
+    epochs = sparseml_wrapper.check_epoch_override(epochs)
+
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         if sparseml_wrapper.qat_active(epoch):
             logger.info('Disabling half precision, QAT scheduled to run')

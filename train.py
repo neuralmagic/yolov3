@@ -327,6 +327,11 @@ def train(hyp, opt, device, tb_writer=None):
                 optimizer.zero_grad()
                 if ema:
                     ema.update(model)
+            elif hasattr(scaler, "emulated_step"):
+                # Call for SparseeML integration since the number of steps per epoch can vary
+                # This keeps the number of steps per epoch equivalent to the number of batches per epoch
+                # Does not step the scaler or the optimizer
+                scaler.emulated_step()
 
             # Print
             if rank in [-1, 0]:

@@ -109,6 +109,7 @@ if __name__ == '__main__':
     # Load PyTorch model
     device = select_device(opt.device)
     model, extras = load_checkpoint('ensemble', opt.weights, device)  # load FP32 model
+    sparseml_wrapper = extras['sparseml_wrapper']
     labels = model.names
 
     # Checks
@@ -147,16 +148,17 @@ if __name__ == '__main__':
 
         print('\nStarting ONNX export with onnx %s...' % onnx.__version__)
         f = opt.weights.replace('.pt', '.onnx')  # filename
-        if not opt.sparseml_recipe:
+        if not sparseml_wrapper.enabled:
             torch.onnx.export(model, img, f, verbose=False, opset_version=12, input_names=['images'],
                               output_names=['classes', 'boxes'] if y is None else ['output'],
                               dynamic_axes={'images': {0: 'batch', 2: 'height', 3: 'width'},  # size(1,3,640,640)
                                             'output': {0: 'batch', 2: 'y', 3: 'x'}} if opt.dynamic else None)
         else:
+            # export through SparseML so quantized and pruned graphs can be corrected
             save_dir = '/'.join(f.split('/')[:-1])
             save_name = f.split('/')[-1]
             exporter = ModuleExporter(model, save_dir)
-            exporter.export_onnx(img, convert_qat=True)
+            exporter.export_onnx(img, name=save_name, convert_qat=True)
             try:
                 skip_onnx_input_quantize(f, f)
             except:

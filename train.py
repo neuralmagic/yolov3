@@ -252,9 +252,10 @@ def train(hyp, opt, device, tb_writer=None):
 
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         if sparseml_wrapper.qat_active(epoch):
-            logger.info('Disabling half precision, QAT scheduled to run')
+            logger.info('Disabling half precision and EMA, QAT scheduled to run')
             half_precision = False
             scaler._enabled = False
+            ema.enabled = False
 
         model.train()
 
@@ -328,7 +329,7 @@ def train(hyp, opt, device, tb_writer=None):
                 if ema:
                     ema.update(model)
             elif hasattr(scaler, "emulated_step"):
-                # Call for SparseeML integration since the number of steps per epoch can vary
+                # Call for SparseML integration since the number of steps per epoch can vary
                 # This keeps the number of steps per epoch equivalent to the number of batches per epoch
                 # Does not step the scaler or the optimizer
                 scaler.emulated_step()

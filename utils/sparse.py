@@ -50,7 +50,6 @@ class SparseMLWrapper(object):
         self.manager.initialize_loggers([
             SparsificationGroupLogger(
                 lambda_func=_logging_lambda,
-                python=self.logger,
                 tensorboard=tb_writer,
             )
         ])

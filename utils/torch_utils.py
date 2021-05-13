@@ -278,14 +278,21 @@ class ModelEMA:
 
     def __init__(self, model, decay=0.9999, updates=0, enabled=True):
         # Create EMA
-        self.ema = deepcopy(model.module if is_parallel(model) else model).eval()  # FP32 EMA
+        self._model = model
+        self._ema = deepcopy(model.module if is_parallel(model) else model).eval()  # FP32 EMA
         # if next(model.parameters()).device.type != 'cpu':
         #     self.ema.half()  # FP16 EMA
         self.updates = updates  # number of EMA updates
         self.decay = lambda x: decay * (1 - math.exp(-x / 2000))  # decay exponential ramp (to help early epochs)
         self.enabled = enabled
-        for p in self.ema.parameters():
+        for p in self._ema.parameters():
             p.requires_grad_(False)
+
+    @property
+    def ema(self):
+        if not self.enabled:
+            return deepcopy(self._model.module if is_parallel(self._model) else self._model).eval()
+        return self._ema
 
     def state_dict(self, pickle=True):
         ema = deepcopy(self.ema).float()
@@ -295,27 +302,22 @@ class ModelEMA:
         }
 
     def load_state_dict(self, state_dict):
+        if not self.enabled:
+            return
         pickled = isinstance(state_dict['ema'], nn.Module)
         self.ema.load_state_dict(state_dict['ema'].float().state_dict() if pickled else state_dict['ema'])
         self.updates = state_dict['updates']
 
     def update(self, model):
-        if self.check_reset_model(model):
-            # weight names in model have changed (quantization applied)
-            # set ema to be equal to current model
-            del self.ema
-            self.ema = deepcopy(model.module if is_parallel(model) else model).eval()
-
+        self._model = model
+        if not self.enabled:
             return
 
         with torch.no_grad():
-            if self.enabled:
-                self.updates += 1
-                d = self.decay(self.updates)
-            else:
-                d = 0
-
             msd = model.module.state_dict() if is_parallel(model) else model.state_dict()  # model state_dict
+            self.updates += 1
+            d = self.decay(self.updates)
+
             for k, v in self.ema.state_dict().items():
                 if v.dtype.is_floating_point:
                     mv = msd[k].detach()
@@ -326,10 +328,3 @@ class ModelEMA:
     def update_attr(self, model, include=(), exclude=('process_group', 'reducer')):
         # Update EMA attributes
         copy_attr(self.ema, model, include, exclude)
-
-    def check_reset_model(self, model):
-        msd = model.module.state_dict() if is_parallel(model) else model.state_dict()  # model state_dict
-        mkeys = {k for k, v in msd.items() if v.dtype.is_floating_point}
-        ekeys = {k for k, v in msd.items() if v.dtype.is_floating_point}
-
-        return len(mkeys.symmetric_difference(ekeys)) > 0

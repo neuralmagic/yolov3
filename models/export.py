@@ -64,6 +64,10 @@ def load_checkpoint(type_, weights, device, cfg=None, hyp=None, nc=None, recipe=
         model_key = 'ema' if (type_ in ['ema', 'ensemble'] and 'ema' in ckpt and ckpt['ema']) else 'model'
         state_dict = ckpt[model_key].float().state_dict() if pickled else ckpt[model_key]
 
+    # turn gradients for params back on in case they were removed
+    for p in model.parameters():
+        p.requires_grad = True
+
     # load sparseml recipe for applying pruning and quantization
     recipe = recipe or (ckpt['recipe'] if 'recipe' in ckpt else None)
     sparseml_wrapper = SparseMLWrapper(model, recipe)

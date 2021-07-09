@@ -72,22 +72,22 @@ def load_checkpoint(type_, weights, device, cfg=None, hyp=None, nc=None, recipe=
     # load sparseml recipe for applying pruning and quantization
     recipe = recipe or (ckpt['recipe'] if 'recipe' in ckpt else None)
     sparseml_wrapper = SparseMLWrapper(model, recipe)
+
     if type_ in ['ema', 'ensemble']:
-        # apply the recipe to create the final state of the model when not training
+        # apply the recipe to create the final state of the model when not training and restore weights
         sparseml_wrapper.apply()
+        state_dict = load_state_dict(model, state_dict, train=False, exclude_anchors=False)
     else:
-        # intialize the recipe for training
+        # intialize the recipe for training and restore the weights
+        # before if no quantized weights or after if there are
+        quantized_state_dict = any([name.endswith('.zero_point') for name in state_dict.keys()])
+        exclude_anchors = (cfg or hyp.get('anchors')) and not resume
+        if not quantized_state_dict:
+            state_dict = load_state_dict(model, state_dict, train=True, exclude_anchors=exclude_anchors)
         sparseml_wrapper.initialize(start_epoch)
+        if quantized_state_dict:
+            state_dict = load_state_dict(model, state_dict, train=True, exclude_anchors=exclude_anchors)
 
-    # fix older state_dict names not porting to the new model setup
-    state_dict = {key if not key.startswith("module.") else key[7:]: val for key, val in state_dict.items()}
-
-    if type_ == 'train':
-        # load any missing weights from the model
-        exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
-        state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
-
-    model.load_state_dict(state_dict, strict=type_ != 'train')  # load
     model.float()
     report = 'Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights)
 
@@ -98,6 +98,19 @@ def load_checkpoint(type_, weights, device, cfg=None, hyp=None, nc=None, recipe=
         'sparseml_wrapper': sparseml_wrapper,
         'report': report,
     }
+
+
+def load_state_dict(model, state_dict, train, exclude_anchors):
+    # fix older state_dict names not porting to the new model setup
+    state_dict = {key if not key.startswith("module.") else key[7:]: val for key, val in state_dict.items()}
+
+    if train:
+        # load any missing weights from the model
+        state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=['anchor'] if exclude_anchors else [])
+
+    model.load_state_dict(state_dict, strict=not train)  # load
+
+    return state_dict
 
 
 if __name__ == '__main__':

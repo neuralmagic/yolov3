@@ -79,6 +79,9 @@ def load_checkpoint(type_, weights, device, cfg=None, hyp=None, nc=None, recipe=
         # intialize the recipe for training
         sparseml_wrapper.initialize(start_epoch)
 
+    # fix older state_dict names not porting to the new model setup
+    state_dict = {key if not key.startswith("module.") else key[7:]: val for key, val in state_dict.items()}
+
     if type_ == 'train':
         # load any missing weights from the model
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys

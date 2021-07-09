@@ -72,21 +72,22 @@ def load_checkpoint(type_, weights, device, cfg=None, hyp=None, nc=None, recipe=
     # load sparseml recipe for applying pruning and quantization
     recipe = recipe or (ckpt['recipe'] if 'recipe' in ckpt else None)
     sparseml_wrapper = SparseMLWrapper(model, recipe)
+    exclude_anchors = (cfg or hyp.get('anchors')) and not resume
+    loaded = False
 
     if type_ in ['ema', 'ensemble']:
-        # apply the recipe to create the final state of the model when not training and restore weights
+        # apply the recipe to create the final state of the model when not training
         sparseml_wrapper.apply()
-        state_dict = load_state_dict(model, state_dict, train=False, exclude_anchors=False)
     else:
-        # intialize the recipe for training and restore the weights
-        # before if no quantized weights or after if there are
+        # intialize the recipe for training and restore the weights before if no quantized weights
         quantized_state_dict = any([name.endswith('.zero_point') for name in state_dict.keys()])
-        exclude_anchors = (cfg or hyp.get('anchors')) and not resume
         if not quantized_state_dict:
             state_dict = load_state_dict(model, state_dict, train=True, exclude_anchors=exclude_anchors)
+            loaded = True
         sparseml_wrapper.initialize(start_epoch)
-        if quantized_state_dict:
-            state_dict = load_state_dict(model, state_dict, train=True, exclude_anchors=exclude_anchors)
+
+    if not loaded:
+        state_dict = load_state_dict(model, state_dict, train=type_ not in ['ema', 'ensemble'], exclude_anchors=exclude_anchors)
 
     model.float()
     report = 'Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights)

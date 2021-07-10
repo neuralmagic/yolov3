@@ -89,12 +89,11 @@ class WandbLogger():
                 model_artifact_name = WANDB_ARTIFACT_PREFIX + model_artifact_name
                 assert wandb, 'install wandb to resume wandb runs'
                 # Resume wandb-artifact:// runs here| workaround for not overwriting wandb.config
-                self.wandb_run = wandb.init(id=run_id, project=project, resume='allow', allow_val_change=True)
+                self.wandb_run = wandb.init(id=run_id, project=project, resume='allow')
                 opt.resume = model_artifact_name
         elif self.wandb:
             self.wandb_run = wandb.init(config=opt,
                                         resume="allow",
-                                        allow_val_change=True,
                                         project='YOLOv5' if opt.project == 'runs/train' else Path(opt.project).stem,
                                         name=name,
                                         job_type=job_type,
@@ -104,8 +103,10 @@ class WandbLogger():
                 if not opt.resume:
                     wandb_data_dict = self.check_and_upload_dataset(opt) if opt.upload_dataset else data_dict
                     # Info useful for resuming from artifacts
-                    self.wandb_run.config.opt = vars(opt)
-                    self.wandb_run.config.data_dict = wandb_data_dict
+                    self.wandb_run.config.update({
+                        'opt': vars(opt),
+                        'data_dict': wandb_data_dict
+                    }, allow_val_change=True)
                 self.data_dict = self.setup_training(opt, data_dict)
             if self.job_type == 'Dataset Creation':
                 self.data_dict = self.check_and_upload_dataset(opt)
